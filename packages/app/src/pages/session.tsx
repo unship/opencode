@@ -1684,12 +1684,46 @@ export default function Page() {
     ),
   )
 
+  const handleWidgetPrompt = (e: Event) => {
+    const detail = (e as CustomEvent).detail
+    if (!detail?.text || typeof detail.text !== "string") return
+    const sessionID = params.id
+    if (!sessionID) return
+    const currentModel = local.model.current()
+    const currentAgent = local.agent.current()
+    if (!currentModel || !currentAgent) return
+
+    const text = detail.text
+    const draft: FollowupDraft = {
+      sessionID,
+      sessionDirectory: sdk.directory,
+      prompt: [{ type: "text", content: text, start: 0, end: text.length }],
+      context: [],
+      agent: currentAgent.name,
+      model: { providerID: currentModel.provider.id, modelID: currentModel.id },
+    }
+    void sendFollowupDraft({
+      client: sdk.client,
+      sync,
+      globalSync,
+      draft,
+      optimisticBusy: true,
+    }).catch((err) => {
+      showToast({
+        title: language.t("prompt.toast.promptSendFailed.title"),
+        description: err instanceof Error ? err.message : language.t("common.requestFailed"),
+      })
+    })
+  }
+
   onMount(() => {
     document.addEventListener("keydown", handleKeyDown)
+    document.addEventListener("opencode:widget-prompt", handleWidgetPrompt)
   })
 
   onCleanup(() => {
     document.removeEventListener("keydown", handleKeyDown)
+    document.removeEventListener("opencode:widget-prompt", handleWidgetPrompt)
     if (reviewFrame !== undefined) cancelAnimationFrame(reviewFrame)
     if (refreshFrame !== undefined) cancelAnimationFrame(refreshFrame)
     if (refreshTimer !== undefined) window.clearTimeout(refreshTimer)

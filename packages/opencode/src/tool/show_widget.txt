@@ -1,0 +1,22 @@
+Render an interactive UI widget inline in the chat conversation.
+
+IMPORTANT: You MUST call the read_me tool first to load the widget design guidelines before using this tool.
+
+The widget_code field should contain a self-contained HTML fragment (CSS + HTML + script) following the guidelines from read_me. The widget will be rendered inside a Shadow DOM container in the chat.
+
+## Key rules for widget_code:
+
+- Structure: <style> first, HTML next, <script> last
+- No inline event handlers. Use addEventListener.
+- Use CSS variables for theming (--color-bg, --color-text, --color-primary, etc.)
+- The ONLY way to send results back to the conversation is window.prefillPrompt(text)
+- The final action button MUST call window.prefillPrompt(text) on click
+- Do NOT show "Sent!" or "Done!" without calling window.prefillPrompt()
+- Do NOT use clipboard copy as the final action
+
+## Self-check:
+
+Before outputting widget_code, verify:
+1. Does the final button use addEventListener("click", ...) that calls window.prefillPrompt(text)?
+2. Is the prompt text assembled from actual user selections?
+3. Are all styles using CSS variables, not hardcoded colors?

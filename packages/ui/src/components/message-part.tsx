@@ -5,6 +5,7 @@ import {
   createSignal,
   For,
   Match,
+  on,
   onMount,
   Show,
   Switch,
@@ -358,6 +359,17 @@ export function getToolInfo(tool: string, input: any = {}): ToolInfo {
         icon: "brain",
         title: input.name || i18n.t("ui.tool.skill"),
       }
+    case "show_widget":
+      return {
+        icon: "mcp",
+        title: input.title || "Widget",
+      }
+    case "read_me":
+      return {
+        icon: "brain",
+        title: "Design Guidelines",
+        subtitle: Array.isArray(input.modules) ? input.modules.join(", ") : undefined,
+      }
     default:
       return {
         icon: "mcp",
@@ -390,7 +402,7 @@ function sessionLink(id: string | undefined, path: string, href?: (id: string) =
 }
 
 const CONTEXT_GROUP_TOOLS = new Set(["read", "glob", "grep", "list"])
-const HIDDEN_TOOLS = new Set(["todowrite"])
+const HIDDEN_TOOLS = new Set(["todowrite", "read_me"])
 
 function list<T>(value: T[] | undefined | null, fallback: T[]) {
   if (Array.isArray(value)) return value
@@ -2238,5 +2250,181 @@ ToolRegistry.register({
     )
 
     return <BasicTool icon="brain" status={props.status} trigger={trigger()} hideDetails />
+  },
+})
+
+// -- Widget Tool (Generative UI) --
+
+function createDocumentProxy(root: ShadowRoot): typeof document {
+  return new Proxy(document, {
+    get(target, prop, receiver) {
+      if (prop === "querySelector") {
+        return (selector: string) => root.querySelector(selector)
+      }
+      if (prop === "querySelectorAll") {
+        return (selector: string) => root.querySelectorAll(selector)
+      }
+      if (prop === "getElementById") {
+        return (id: string) => root.querySelector(`#${CSS.escape(id)}`)
+      }
+      if (prop === "getElementsByClassName") {
+        return (className: string) => root.querySelectorAll(`.${CSS.escape(className)}`)
+      }
+      if (prop === "getElementsByTagName") {
+        return (tag: string) => root.querySelectorAll(tag)
+      }
+      const value = Reflect.get(target, prop, receiver)
+      if (typeof value === "function") {
+        return value.bind(target)
+      }
+      return value
+    },
+  })
+}
+
+const WIDGET_THEME_VARS: Record<string, string> = {
+  "--color-bg": "var(--color-background-base, #1a1a2e)",
+  "--color-text": "var(--color-text-base, #e0e0e0)",
+  "--color-text-muted": "var(--color-text-dimmed, #888)",
+  "--color-border": "var(--color-divider, #333)",
+  "--color-primary": "var(--color-button-primary-background, #6366f1)",
+  "--color-primary-text": "var(--color-button-primary-text, #fff)",
+  "--color-surface": "var(--color-background-surface, #222)",
+}
+
+function executeWidgetScripts(shadowRoot: ShadowRoot, widgetCode: string) {
+  const container = document.createElement("div")
+  container.innerHTML = widgetCode
+  const scripts = container.querySelectorAll("script")
+  const docProxy = createDocumentProxy(shadowRoot)
+
+  for (const script of scripts) {
+    const src = script.getAttribute("src")
+    if (src) {
+      const el = document.createElement("script")
+      el.src = src
+      shadowRoot.appendChild(el)
+    } else {
+      const code = script.textContent
+      if (!code) continue
+      try {
+        const fn = new Function("document", "shadowRoot", code)
+        fn(docProxy, shadowRoot)
+      } catch (e) {
+        console.error("[widget-tool] Script execution error:", e)
+      }
+    }
+  }
+}
+
+function injectWidget(host: HTMLDivElement, widgetCode: string) {
+  let shadowRoot = host.shadowRoot
+  if (!shadowRoot) {
+    shadowRoot = host.attachShadow({ mode: "open" })
+  }
+  shadowRoot.innerHTML = ""
+
+  const wrapper = document.createElement("div")
+  wrapper.setAttribute("data-widget-root", "")
+  for (const [key, value] of Object.entries(WIDGET_THEME_VARS)) {
+    wrapper.style.setProperty(key, value)
+  }
+
+  const htmlWithoutScripts = widgetCode.replace(/<script[\s\S]*?<\/script>/gi, "")
+  wrapper.innerHTML = htmlWithoutScripts
+  shadowRoot.appendChild(wrapper)
+
+  executeWidgetScripts(shadowRoot, widgetCode)
+
+  const win = host.ownerDocument.defaultView
+  if (win) {
+    ;(win as any).prefillPrompt = (text: string) => {
+      host.dispatchEvent(
+        new CustomEvent("opencode:widget-prompt", {
+          bubbles: true,
+          composed: true,
+          detail: { text },
+        }),
+      )
+    }
+  }
+}
+
+ToolRegistry.register({
+  name: "show_widget",
+  render(props) {
+    const [rendered, setRendered] = createSignal(false)
+    let hostRef: HTMLDivElement | undefined
+
+    const title = createMemo(() => props.metadata?.title || props.input?.title || "Widget")
+    const widgetCode = createMemo(() => props.metadata?.widget_code || "")
+    const loadingMessages = createMemo(
+      () => (props.metadata?.loading_messages || props.input?.loading_messages || ["Loading..."]) as string[],
+    )
+    const pending = createMemo(() => props.status === "pending" || props.status === "running")
+    const completed = createMemo(() => props.status === "completed")
+
+    createEffect(
+      on(
+        () => [completed(), widgetCode()] as const,
+        ([done, code]) => {
+          if (!done || !code || !hostRef) return
+          injectWidget(hostRef, code)
+          setRendered(true)
+        },
+      ),
+    )
+
+    onCleanup(() => {
+      if (hostRef) {
+        const win = hostRef.ownerDocument.defaultView
+        if (win && (win as any).prefillPrompt) {
+          delete (win as any).prefillPrompt
+        }
+      }
+    })
+
+    const loadingMessage = createMemo(() => {
+      const msgs = loadingMessages()
+      return msgs[0] || "Loading..."
+    })
+
+    const trigger = () => (
+      <div data-slot="basic-tool-tool-info-structured">
+        <div data-slot="basic-tool-tool-info-main">
+          <span data-slot="basic-tool-tool-title">
+            <TextShimmer text={title()} active={pending()} />
+          </span>
+          <Show when={pending()}>
+            <span data-slot="basic-tool-tool-subtitle">{loadingMessage()}</span>
+          </Show>
+        </div>
+      </div>
+    )
+
+    return (
+      <BasicTool
+        icon="mcp"
+        status={props.status}
+        trigger={trigger()}
+        defaultOpen
+        locked={completed()}
+        hideDetails={!completed()}
+      >
+        <Show when={completed() && widgetCode()}>
+          <div
+            data-component="widget-tool-container"
+            style={{
+              padding: "12px",
+              "min-height": "60px",
+              "border-radius": "8px",
+              overflow: "hidden",
+            }}
+          >
+            <div ref={hostRef} data-widget-host="" />
+          </div>
+        </Show>
+      </BasicTool>
+    )
   },
 })
