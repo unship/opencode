@@ -9,7 +9,7 @@ import { Auth } from "../auth"
 import { Flag } from "../flag/flag"
 import { ProviderID } from "../provider/schema"
 import { WorkspaceRouterMiddleware } from "./router"
-import { websocket } from "hono/bun"
+import { websocket, serveStatic } from "hono/bun"
 import { errors } from "./error"
 import { GlobalRoutes } from "./routes/global"
 import { MDNS } from "./mdns"
@@ -38,7 +38,7 @@ export namespace Server {
 
   export const ControlPlaneRoutes = (opts?: { cors?: string[] }): Hono => {
     const app = new Hono()
-    return app
+    app
       .onError(errorHandler(log))
       .use((c, next) => {
         // Allow CORS preflight requests to succeed without auth.
@@ -235,6 +235,14 @@ export namespace Server {
         },
       )
       .use(WorkspaceRouterMiddleware)
+
+    const webDist = process.env.OPENCODE_WEB_DIST
+    if (webDist) {
+      app.get("/*", serveStatic({ root: webDist }))
+      app.get("/*", serveStatic({ root: webDist, path: "/index.html" }))
+    }
+
+    return app
   }
 
   export function createApp(opts: { cors?: string[] }) {
